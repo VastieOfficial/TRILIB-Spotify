@@ -7,19 +7,21 @@ This tool is provided for personal, non-commercial use only. In Russia, personal
 # Usage
 
 1. Set enviveroment variables:
-| Variable         | Value                                                     |
-| ---------------: | --------------------------------------------------------- |
-| TRI_CACHE        | Path to Trilib's cache (any folder, default CWD/TRICACHE) |
-| TRI_SPOTIFY_PORT | HTTP port (default 3500)                                  |
+
+| Variable         | Value                                                     
+| ---------------: | --------------------------------------------------------- 
+| TRI_CACHE        | Path to Trilib's cache (any folder, default CWD/TRICACHE) 
+| TRI_SPOTIFY_PORT | HTTP port (default 3500)                                  
 1. Run / build: `cargo run`
 2. POST Request JSON payload (escape Unicode) to `/dl`:
 Either URL or Title must be specified.
-| Key              | Value                                                                                                     |
-| ---------------: | --------------------------------------------------------------------------------------------------------- |
-| url              | Can be empty, URL to spotify in format spotify:track:ID or a direct URL                                   |
-| title            | Can be empty, Title of the song to search in Spotify                                                      |
-| hash             | Hash of the track (coming from TRIlib, any string that doesn't violate filesystem's restrictions)                                                                                                                  |
-| token            | [Spotify Access Token](https://developer.spotify.com/documentation/web-api/concepts/access-token) with scope `streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing`                                                                        |
+
+| Key              | Value                                                                                                     
+| ---------------: | --------------------------------------------------------------------------------------------------------- 
+| url              | Can be empty, URL to spotify in format spotify:track:ID or a direct URL                                   
+| title            | Can be empty, Title of the song to search in Spotify                                                      
+| hash             | Hash of the track (coming from TRIlib, any string that doesn't violate filesystem's restrictions)                                                                                                                  
+| token            | [Spotify Access Token](https://developer.spotify.com/documentation/web-api/concepts/access-token) with scope `streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing`                                                                        
 3. Done! Your track will be saved to TRI_CACHE/hash/spotify/[best/medium/low].[extenstion]
 
 # License
