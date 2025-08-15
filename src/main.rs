@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, fs, io::Read, panic::AssertUnwindSafe, path::PathBuf, process::exit, time::Duration};
+use std::{collections::HashMap, env, fs, io::Read, panic::AssertUnwindSafe, path::PathBuf, time::Duration};
 
 use librespot::{
     audio::{AudioDecrypt, AudioFile},
@@ -41,10 +41,7 @@ pub async fn save_best_medium_low(track: SpotifyId, hash: String, token: String)
     let player_config = PlayerConfig::default();
     let session = Session::new(session_config, None);
     
-    if let Err(e) = session.connect(Credentials::with_access_token(token), false).await {
-        println!("Error connecting: {}", e);
-        exit(1);
-    }
+    session.connect(Credentials::with_access_token(token), false).await.unwrap();
     let player = PlayerTrackLoader::new(session, player_config);
     let decrypted_files: Vec<(AudioFileFormat, AudioDecrypt<AudioFile>)> =
         player.load_decrypted_files(track).await;
