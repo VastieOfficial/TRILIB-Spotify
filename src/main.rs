@@ -1,28 +1,32 @@
-use std::{collections::HashMap, env, fs, io::Read, panic::AssertUnwindSafe, path::PathBuf, time::Duration};
+use std::{
+    collections::HashMap, env,fs, io::{Read}, panic::AssertUnwindSafe, path::PathBuf, time::Duration
+};
+use anyhow::{anyhow, Result};
 
 use librespot::{
     audio::{AudioDecrypt, AudioFile},
     core::{
-        authentication::Credentials, config::SessionConfig, session::Session, spotify_id::{SpotifyId, SpotifyItemType},
+        authentication::Credentials,
+        config::SessionConfig,
+        session::Session,
+        spotify_id::{SpotifyId, SpotifyItemType},
     },
     metadata::audio::AudioFileFormat,
     playback::{config::PlayerConfig, player::PlayerTrackLoader},
 };
 
-use hyper::{StatusCode};
+use hyper::StatusCode;
 use reqwest::Client;
-use tokio::time::timeout;
-use std::error::Error;
 use serde_json::Value;
+use std::error::Error;
+use tokio::time::timeout;
 use urlencoding::encode;
 
-use axum::{
-    extract::DefaultBodyLimit, response::IntoResponse, routing::post, Json, Router
-};
+use axum::{Json, Router, extract::DefaultBodyLimit, response::IntoResponse, routing::post};
+use futures_util::future::FutureExt;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use once_cell::sync::Lazy;
-use futures_util::future::FutureExt;
 
 
 fn get_extension(format: AudioFileFormat) -> &'static str {
@@ -36,12 +40,26 @@ fn get_extension(format: AudioFileFormat) -> &'static str {
         OTHER5 => "dat",
     }
 }
-pub async fn save_best_medium_low(track: SpotifyId, hash: String, token: String) {
+#[derive(Debug)]
+struct TrackError(&'static str);
+
+impl std::fmt::Display for TrackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Error for TrackError {}
+
+pub async fn save_best_medium_low(track: SpotifyId, hash: String, token: String)  -> Result<(), Box<dyn Error>> {
     let session_config = SessionConfig::default();
     let player_config = PlayerConfig::default();
     let session = Session::new(session_config, None);
+
+    session
+        .connect(Credentials::with_access_token(token), false)
+        .await?;
     
-    session.connect(Credentials::with_access_token(token), false).await.unwrap();
     let player = PlayerTrackLoader::new(session, player_config);
     let decrypted_files: Vec<(AudioFileFormat, AudioDecrypt<AudioFile>)> =
         player.load_decrypted_files(track).await;
@@ -82,22 +100,22 @@ pub async fn save_best_medium_low(track: SpotifyId, hash: String, token: String)
 
     let mut used_formats = std::collections::HashSet::new();
 
-    let try_save = |label: &str,
-                    tiers: &[&[AudioFileFormat]],
-                    file_map: &mut HashMap<AudioFileFormat, AudioDecrypt<AudioFile>>,
-                    used_formats: &mut std::collections::HashSet<AudioFileFormat>| {
-        for tier in tiers {
-            for format in *tier {
-                if used_formats.contains(format) {
-                    continue;
-                }
-                if let Some(file) = file_map.remove(format) {
-                    let format_clone = *format;
-                    let label_owned = label.to_string();
-                    let hash_owned = hash.clone();
-                    let path_clone = (*CACHEDIR).clone();
+    let try_save = async
+        |label: &str,
+         tiers: &[&[AudioFileFormat]],
+         file_map: &mut HashMap<AudioFileFormat, AudioDecrypt<AudioFile>>,
+         used_formats: &mut std::collections::HashSet<AudioFileFormat>| {
+            for tier in tiers {
+                for format in *tier {
+                    if used_formats.contains(format) {
+                        continue;
+                    }
+                    if let Some(file) = file_map.remove(format) {
+                        let format_clone = *format;
+                        let label_owned = label.to_string();
+                        let hash_owned = hash.clone();
+                        let path_clone = (*CACHEDIR).clone();
 
-                    tokio::spawn(async move {
                         let buffer = tokio::task::spawn_blocking(move || {
                             let mut buf = Vec::new();
                             let mut f = file;
@@ -121,34 +139,43 @@ pub async fn save_best_medium_low(track: SpotifyId, hash: String, token: String)
                             format_clone,
                             filepath.to_str().unwrap()
                         );
-                    });
 
-                    used_formats.insert(*format);
-                    return;
+                        used_formats.insert(*format);
+                        return;
+                    }
                 }
             }
-        }
-        println!("No available format found for {}", label);
-    };
+            println!("No available format found for {}", label);
+        };
 
     try_save(
         "best",
         &[&best_priority, &medium_priority, &low_priority],
         &mut file_map,
         &mut used_formats,
-    );
-    try_save(
-        "medium",
-        &[&medium_priority, &low_priority, &best_priority],
-        &mut file_map,
-        &mut used_formats,
-    );
-    try_save(
-        "low",
-        &[&low_priority, &medium_priority, &best_priority],
-        &mut file_map,
-        &mut used_formats,
-    );
+    ).await;
+    //if used_formats.len() == 0 {
+        try_save(
+            "medium",
+            &[&medium_priority, &low_priority, &best_priority],
+            &mut file_map,
+            &mut used_formats,
+        ).await;
+    //}
+
+    //if used_formats.len() == 0 {
+        try_save(
+            "low",
+            &[&low_priority, &medium_priority, &best_priority],
+            &mut file_map,
+            &mut used_formats,
+        ).await;
+    //}
+
+    if used_formats.len() == 0 {
+        return Err(Box::new(TrackError("Track can't be saved: no files available")));
+    }
+    Ok(())
 }
 
 static CACHEDIR: Lazy<PathBuf> = Lazy::new(|| {
@@ -171,16 +198,15 @@ static REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 fn extract_spotify_id(payload_url: &str) -> String {
-    return REGEX.captures(payload_url)
+    return REGEX
+        .captures(payload_url)
         .and_then(|captures| captures.get(1)) // Get the first capture group
-        .map(|cap| cap.as_str()).unwrap().to_string() // Convert to SpotifyId (handling errors)
+        .map(|cap| cap.as_str())
+        .unwrap()
+        .to_string(); // Convert to SpotifyId (handling errors)
 }
 
-
-async fn search_song_id(
-    query: &str,
-    access_token: &str,
-) -> Result<String, Box<dyn Error>> {
+async fn search_song_id(query: &str, access_token: &str) -> Result<String, Box<dyn Error>> {
     let client = Client::new();
 
     let uri = format!(
@@ -208,43 +234,58 @@ async fn search_song_id(
     }
 }
 
+
 async fn download(
     Json(payload): Json<DownloadSpotify>,
 ) -> impl IntoResponse {
     let result = timeout(Duration::from_secs(300), async move {
         let run = AssertUnwindSafe(async move {
+            // get track id
             let mut track = if payload.url.is_empty() {
-                let id = match search_song_id(&payload.title, payload.token.as_str()).await {
-                    Ok(id) => id,
-                    Err(_) => return Err(()),
-                };
-                match SpotifyId::from_base62(&id) {
-                    Ok(t) => t,
-                    Err(_) => return Err(()),
-                }
+                let id = search_song_id(&payload.title, &payload.token)
+                    .await
+                    .map_err(|e| anyhow!("search_song_id failed: {}", e))?;
+
+                SpotifyId::from_base62(&id)
+                    .map_err(|_| anyhow!("invalid SpotifyId"))?
             } else {
-                match SpotifyId::from_base62(extract_spotify_id(&payload.url).as_str()) {
-                    Ok(t) => t,
-                    Err(_) => return Err(()),
-                }
+                let extracted = extract_spotify_id(&payload.url);
+                SpotifyId::from_base62(extracted.as_str())
+                    .map_err(|_| anyhow!("invalid SpotifyId"))?
             };
+
             track.item_type = SpotifyItemType::Track;
-            save_best_medium_low(track, payload.hash, payload.token).await;
-            Ok::<(), ()>(())
+
+            // assume save_best_medium_low returns Result<(), E>
+            save_best_medium_low(track, payload.hash, payload.token)
+                .await
+                .map_err(|e| anyhow!("save_best_medium_low failed: {}", e))?;
+
+            Ok::<(), anyhow::Error>(())
         })
         .catch_unwind()
         .await;
 
         match run {
-            Ok(Ok(())) => Ok(()),
-            _ => Err(()),
+            Ok(inner) => inner,
+            Err(panic) => Err(anyhow!("panic: {:?}", panic)),
         }
     })
     .await;
 
     match result {
-        Ok(Ok(())) => (StatusCode::OK, axum::Json(IsOK { ok: true })),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(IsOK { ok: false })),
+        Ok(Ok(())) => (
+            StatusCode::OK,
+            axum::Json(IsOK { ok: true, error: "".to_string() }),
+        ),
+        Ok(Err(err)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(IsOK { ok: false, error: err.to_string() }),
+        ),
+        Err(timeout_err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(IsOK { ok: false, error: format!("timeout: {timeout_err:?}") }),
+        ),
     }
 }
 
@@ -253,12 +294,13 @@ struct DownloadSpotify {
     url: String,
     title: String,
     hash: String,
-    token: String 
+    token: String,
 }
 
 #[derive(Serialize)]
 struct IsOK {
     ok: bool,
+    error: String,
 }
 
 #[tokio::main]
@@ -267,6 +309,8 @@ async fn main() {
     let app = Router::new()
         .route("/dl", post(download))
         .layer(DefaultBodyLimit::max(1024 * 1024));
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", *PORT)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", *PORT))
+        .await
+        .unwrap();
     axum::serve(listener, app).await.unwrap();
 }
