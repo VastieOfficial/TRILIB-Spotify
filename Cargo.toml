@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-librespot = { git = "https://github.com/VastieOfficial/librespot-dl" , tag = "7" }
+librespot = { git = "https://github.com/VastieOfficial/librespot-dl" , tag = "v-stable-2" }
 log = "0.4"
 env_logger = "0.9"  
 tokio = "1.47.1"
