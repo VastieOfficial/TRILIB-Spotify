@@ -9,7 +9,7 @@ use librespot::{
         authentication::Credentials,
         config::SessionConfig,
         session::Session,
-        spotify_id::{SpotifyId, SpotifyItemType},
+        spotify_id::{SpotifyId},
     },
     metadata::audio::AudioFileFormat,
     playback::{config::PlayerConfig, player::PlayerTrackLoader},
@@ -223,7 +223,7 @@ async fn search_song_id(query: &str, access_token: &str) -> Result<String, Box<d
     if !res.status().is_success() {
         return Err(format!("Spotify API error: {}", res.status()).into());
     }
-    let x: String = (res.text().await?);
+    let x: String = res.text().await?;
     let json: Value = serde_json::from_str(&x)?;
     println!("{}", x);
 
@@ -241,7 +241,7 @@ async fn download(
     let result = timeout(Duration::from_secs(300), async move {
         let run = AssertUnwindSafe(async move {
             // get track id
-            let mut track = if payload.url.is_empty() {
+            let track = if payload.url.is_empty() {
                 let id = search_song_id(&payload.title, &payload.token)
                     .await
                     .map_err(|e| anyhow!("search_song_id failed: {}", e))?;
@@ -254,7 +254,7 @@ async fn download(
                     .map_err(|_| anyhow!("invalid SpotifyId"))?
             };
 
-            track.item_type = SpotifyItemType::Track;
+            //track.item_type = SpotifyId::Track;
 
             // assume save_best_medium_low returns Result<(), E>
             save_best_medium_low(track, payload.hash, payload.token)
